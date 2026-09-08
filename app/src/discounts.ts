@@ -37,7 +37,7 @@ export interface PriceBreakdown {
  */
 function percentOfKopecks(baseKopecks: number, percentValue: number): number {
   // Parse string to avoid float scaling bugs on boundaries like 1.005 → 100.49999
-  const str = percentValue.toFixed(3); // "1.005" → "1.005", "1.015" → "1.015"
+  const str = String(percentValue); // "16.1549" → "16.1549", avoids IEEE754 rounding
   const parts = str.split(".");
   let hundredthsOfPercent: bigint;
   const integerPart = parts[0] ?? "0";
@@ -130,6 +130,7 @@ export function priceOrder(order: Order, catalog: Coupon[]): PriceBreakdown {
     const base = coupon.category ? categorySubtotalKopecks(order, coupon.category) : remaining;
     if (base === 0) continue; // skip category coupons with no matching items
     const amount = Math.min(couponAmountKopecks(coupon, base), remaining);
+    if (amount === 0) continue; // skip coupons with zero computed discount
     remaining -= amount;
     couponDiscountKopecks += amount;
     appliedCoupons.push(coupon.code);

@@ -211,4 +211,11 @@ describe("priceOrder", () => {
     const result = priceOrder(o, [boundary]);
     expect(result.couponDiscountKopecks).toBe(51); // 1.015% rounds to 1.02%, 1.02% of 5000 = 51
   });
+
+  it("boundary: 16.1549% rounds to 16.15% giving 1615 kopecks (162 when base 1000)", () => {
+    const precise = coupon({ code: "PRECISE1549", value: 16.1549 });
+    const o = order({ items: [item({ unitPriceKopecks: 1_000 })], coupons: ["PRECISE1549"] });
+    const result = priceOrder(o, [precise]);
+    expect(result.couponDiscountKopecks).toBe(162); // 16.1549% rounds to 16.15%, 16.15% of 1000 = 161.5 → 162
+  });
 });
