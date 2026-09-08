@@ -29,14 +29,29 @@ export interface PriceBreakdown {
  * IEEE754 and round down to 161 instead of the mathematically correct 162.
  *
  * D-14: percentValue carries at most 2 decimal places (hundredths of a
- * percent, per the Coupon.value contract in types.ts); `Math.round(percentValue * 100)`
- * is also where any extra decimals get rounded away (half up), so e.g.
- * 16.151 is treated identically to 16.15.
+ * percent, per the Coupon.value contract in types.ts). We parse the string
+ * representation rather than scale-then-round the float, to avoid another
+ * IEEE754 boundary case: `(1.005) * 100` yields 100.49999..., which rounds
+ * to 100 instead of 101. Parsing "1.005" as a string gives us exactly 1005
+ * hundredths, which correctly becomes 1.01% when rounded to 2 decimals.
  */
 function percentOfKopecks(baseKopecks: number, percentValue: number): number {
-  const scaledPercent = BigInt(Math.round(percentValue * 100)); // hundredths of a percent, exact integer
+  // Parse string to avoid float scaling bugs on boundaries like 1.005 → 100.49999
+  const str = percentValue.toFixed(3); // "1.005" → "1.005", "1.015" → "1.015"
+  const parts = str.split(".");
+  let hundredthsOfPercent: bigint;
+  const integerPart = parts[0] ?? "0";
+  if (parts[1]) {
+    const decimalPart = parts[1].slice(0, 2).padEnd(2, "0"); // "005" → "00", "15" → "15"
+    const rawValue = BigInt(integerPart) * 100n + BigInt(decimalPart); // "1" + "00" = 100; "1" + "01" = 101
+    // Now round the third decimal place if it exists: check parts[1][2]
+    const thirdDecimal = parts[1][2] ? parseInt(parts[1][2]) : 0;
+    hundredthsOfPercent = rawValue + (thirdDecimal >= 5 ? 1n : 0n);
+  } else {
+    hundredthsOfPercent = BigInt(integerPart) * 100n;
+  }
   const denominator = 10_000n; // 100 (percent) * 100 (scale)
-  const numerator = BigInt(baseKopecks) * scaledPercent;
+  const numerator = BigInt(baseKopecks) * hundredthsOfPercent;
   const quotient = numerator / denominator;
   const remainder = numerator % denominator;
   return Number(quotient) + (remainder * 2n >= denominator ? 1 : 0);
@@ -113,6 +128,7 @@ export function priceOrder(order: Order, catalog: Coupon[]): PriceBreakdown {
     // D-5/D-13: category base is raw and fixed; an unrestricted coupon's
     // base is D-1's running balance, so coupons stack sequentially.
     const base = coupon.category ? categorySubtotalKopecks(order, coupon.category) : remaining;
+    if (base === 0) continue; // skip category coupons with no matching items
     const amount = Math.min(couponAmountKopecks(coupon, base), remaining);
     remaining -= amount;
     couponDiscountKopecks += amount;

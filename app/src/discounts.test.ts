@@ -197,4 +197,18 @@ describe("priceOrder", () => {
     expect(preciseResult.couponDiscountKopecks).toBe(162);
     expect(preciseResult.couponDiscountKopecks).toBe(roundedResult.couponDiscountKopecks);
   });
+
+  it("boundary: 1.005% (IEEE754 float boundary) rounds to 1.01% giving 51 cents on 5000 cents", () => {
+    const boundary = coupon({ code: "BOUNDARY", value: 1.005 });
+    const o = order({ items: [item({ unitPriceKopecks: 5_000 })], coupons: ["BOUNDARY"] });
+    const result = priceOrder(o, [boundary]);
+    expect(result.couponDiscountKopecks).toBe(51); // 1.01% of 5000 = 50.5 → rounds to 51
+  });
+
+  it("boundary: 1.015% rounds to 1.02% giving 51 cents on 5000 cents", () => {
+    const boundary = coupon({ code: "BOUNDARY", value: 1.015 });
+    const o = order({ items: [item({ unitPriceKopecks: 5_000 })], coupons: ["BOUNDARY"] });
+    const result = priceOrder(o, [boundary]);
+    expect(result.couponDiscountKopecks).toBe(51); // 1.015% rounds to 1.02%, 1.02% of 5000 = 51
+  });
 });

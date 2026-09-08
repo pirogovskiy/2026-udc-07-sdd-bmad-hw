@@ -19,7 +19,9 @@
 | AC-9 (граничний) | Порожнє замовлення — нульові знижки, нульова доставка, без винятку | `discounts.ts:priceOrder` (весь пайплайн на `items: []`) + `pricing.ts:shippingKopecks` (уже специфіковано, не змінено) | `AC-9 (граничний, порожнє замовлення): an item-less order yields zero discounts and zero shipping` | ✅ |
 | AC-10 | Код промокоду, якого немає в каталозі (включно з розбіжністю лише в регістрі), — точне, чутливе до регістру зіставлення й мовчазна відмова | `discounts.ts:resolveEligibleCoupons` (`catalog.find((c) => c.code === code)` — точне порівняння рядків) | `AC-10: a coupon code missing from the catalog is silently ignored`; `AC-10: coupon code matching is exact and case-sensitive (catalog SAVE10, typed save10)` | ✅ |
 | AC-11 | Той самий код, введений двічі, застосовується один раз | `discounts.ts:resolveEligibleCoupons` (`seen`-дедуплікація) | `AC-11: the same coupon code entered twice applies only once` | ✅ |
-| AC-12 | `value` з точністю понад дві десяткові позначки (D-14) округлюється до сотої відсотка перед застосуванням | `discounts.ts:percentOfKopecks` (`Math.round(percentValue * 100)`) | `AC-12: a percent value with more than two decimal places rounds to the nearest hundredth before applying` | ✅ |
+| AC-12 | `value` з точністю понад дві десяткові позначки (D-14) округлюється до сотої відсотка перед застосуванням | `discounts.ts:percentOfKopecks` (рядковий розбір для точного парсингу, потім округлення) | `AC-12: a percent value with more than two decimal places rounds to the nearest hundredth before applying` | ✅ |
+| **Граничні** | IEEE754 точність: 1.005% округлюється на 1.01%, дає 51 копійку на 5000 копійок | `discounts.ts:percentOfKopecks` (рядковий розбір уникає 1.005 * 100 → 100.49999) | `boundary: 1.005% (IEEE754 float boundary) rounds to 1.01% giving 51 cents on 5000 cents` | ✅ |
+| **Граничні** | 1.015% округлюється на 1.02%, дає 51 копійку на 5000 копійок | `discounts.ts:percentOfKopecks` (рядковий розбір) | `boundary: 1.015% rounds to 1.02% giving 51 cents on 5000 cents` | ✅ |
 
 ## Зворотна перевірка
 
@@ -69,5 +71,5 @@
    рішення D-14 і AC-12, потім коментар у `types.ts`, і лише тоді
    закріплено тестом за ID.
 
-`cd app && npm test` — 22/22 зелені (8 наявних + 14 нових: 12 за AC, один
-додатковий тест на AC-10, і один регресійний), `npm run typecheck` — чисто.
+`cd app && npm test` — 24/24 зелені (8 наявних + 16 нових: 12 за AC, один
+додатковий тест на AC-10, один регресійний на дрібний потенційний баг, два на IEEE754 граничні), `npm run typecheck` — чисто.
