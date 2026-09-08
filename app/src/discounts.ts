@@ -22,9 +22,20 @@ export interface PriceBreakdown {
   totalKopecks: number;
 }
 
-/** D-4: half a kopeck rounds up. Only ever called with non-negative amounts. */
-function roundHalfUp(amount: number): number {
-  return Math.floor(amount + 0.5);
+/**
+ * D-4: baseKopecks * percentValue / 100, rounded half up. percentValue may
+ * carry up to 2 decimal places (e.g. 16.15). Done with BigInt so the
+ * multiply-then-divide never drifts on a floating-point .5 boundary —
+ * `(1000 * 16.15) / 100` alone can land a hair under 161.5 in IEEE754 and
+ * round down to 161 instead of the mathematically correct 162.
+ */
+function percentOfKopecks(baseKopecks: number, percentValue: number): number {
+  const scaledPercent = BigInt(Math.round(percentValue * 100)); // hundredths of a percent, exact integer
+  const denominator = 10_000n; // 100 (percent) * 100 (scale)
+  const numerator = BigInt(baseKopecks) * scaledPercent;
+  const quotient = numerator / denominator;
+  const remainder = numerator % denominator;
+  return Number(quotient) + (remainder * 2n >= denominator ? 1 : 0);
 }
 
 function categorySubtotalKopecks(order: Order, category: LineItem["category"]): number {
@@ -34,8 +45,8 @@ function categorySubtotalKopecks(order: Order, category: LineItem["category"]): 
 }
 
 function couponAmountKopecks(coupon: Coupon, base: number): number {
-  const raw = coupon.kind === "percent" ? (base * coupon.value) / 100 : coupon.value;
-  return Math.min(roundHalfUp(raw), base);
+  const raw = coupon.kind === "percent" ? percentOfKopecks(base, coupon.value) : coupon.value;
+  return Math.min(raw, base);
 }
 
 /** D-6/D-8/D-9/D-10: keep codes that exist, aren't expired, and are typed once. */
@@ -87,7 +98,7 @@ export function priceOrder(order: Order, catalog: Coupon[]): PriceBreakdown {
   let remaining = rawSubtotal;
 
   const tierDiscountKopecks = Math.min(
-    roundHalfUp((rawSubtotal * tierPercent(order)) / 100),
+    percentOfKopecks(rawSubtotal, tierPercent(order)),
     remaining,
   );
   remaining -= tierDiscountKopecks;

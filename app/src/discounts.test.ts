@@ -132,6 +132,16 @@ describe("priceOrder", () => {
     expect(result.goodsTotalKopecks).toBe(7);
   });
 
+  it("regression: a fractional percent does not drift on a float boundary (1000 × 16.15% = 162, not 161)", () => {
+    const fractional = coupon({ code: "FRACTIONAL", value: 16.15 });
+    const o = order({
+      items: [item({ unitPriceKopecks: 1_000 })],
+      coupons: ["FRACTIONAL"],
+    });
+    const result = priceOrder(o, [fractional]);
+    expect(result.couponDiscountKopecks).toBe(162);
+  });
+
   it("AC-9 (граничний, порожнє замовлення): an item-less order yields zero discounts and zero shipping", () => {
     const minCoupon = coupon({ code: "MIN95", value: 10, minSubtotalKopecks: 95_000 });
     const o = order({ items: [], coupons: ["MIN95"] });
@@ -151,6 +161,18 @@ describe("priceOrder", () => {
     });
     const result = priceOrder(o, []);
     expect(result.appliedCoupons).toEqual([]);
+    expect(result.goodsTotalKopecks).toBe(20_000);
+  });
+
+  it("AC-10: coupon code matching is exact and case-sensitive (catalog SAVE10, typed save10)", () => {
+    const save10 = coupon({ code: "SAVE10", value: 10 });
+    const o = order({
+      items: [item({ unitPriceKopecks: 20_000 })],
+      coupons: ["save10"],
+    });
+    const result = priceOrder(o, [save10]);
+    expect(result.appliedCoupons).toEqual([]);
+    expect(result.couponDiscountKopecks).toBe(0);
     expect(result.goodsTotalKopecks).toBe(20_000);
   });
 
