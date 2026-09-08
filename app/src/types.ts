@@ -30,7 +30,11 @@ export interface Order {
 export interface Coupon {
   code: string;
   kind: "percent" | "fixed";
-  /** For percent: 0-100. For fixed: an amount in whole kopecks. */
+  /**
+   * For percent: 0-100, at most two decimal places (hundredths of a
+   * percent) — see docs/spec/pricing-discounts.md D-14 for what happens to
+   * extra decimals. For fixed: an amount in whole kopecks.
+   */
   value: number;
   /** ISO date; the coupon is not valid on or after this instant. */
   expiresAt: string;

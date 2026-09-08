@@ -31,6 +31,6 @@ decisions it made from the ticket.
 - **result commit:** `9193dc7 Add discount engine` — the agent's own output, unmodified
 - **command:** `claude -p "$(cat prompt.txt)" --model claude-sonnet-5 --permission-mode bypassPermissions --output-format json`
 - **prompt.txt** — exact prompt given to the agent (identical in shape to Run A's, pointing at the ticket instead of the spec)
-- **result.diff** — `git diff` of `app/src/discounts.ts`, `app/src/discounts.test.ts`, `app/src/index.ts` between the two commits
+- **result.diff** — `git diff` of `app/src/discounts.ts` and `app/src/discounts.test.ts` between the two commits (unlike Run A, this run never touched `app/src/index.ts` — its function isn't wired into the public surface at all)
 - **test-output.txt** — `npm test` output against the agent's own code (25/25 green)
 - **metrics.json** — full `--output-format json` result (`num_turns`, `duration_ms`, `total_cost_usd`)

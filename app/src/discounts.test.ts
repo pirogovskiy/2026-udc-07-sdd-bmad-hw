@@ -187,4 +187,14 @@ describe("priceOrder", () => {
     expect(result.couponDiscountKopecks).toBe(5_000);
     expect(result.goodsTotalKopecks).toBe(45_000);
   });
+
+  it("AC-12: a percent value with more than two decimal places rounds to the nearest hundredth before applying", () => {
+    const precise = coupon({ code: "PRECISE", value: 16.151 });
+    const rounded = coupon({ code: "ROUNDED", value: 16.15 });
+    const o = (coupons: string[]) => order({ items: [item({ unitPriceKopecks: 1_000 })], coupons });
+    const preciseResult = priceOrder(o(["PRECISE"]), [precise]);
+    const roundedResult = priceOrder(o(["ROUNDED"]), [rounded]);
+    expect(preciseResult.couponDiscountKopecks).toBe(162);
+    expect(preciseResult.couponDiscountKopecks).toBe(roundedResult.couponDiscountKopecks);
+  });
 });

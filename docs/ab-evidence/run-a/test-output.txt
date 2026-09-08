@@ -4,7 +4,7 @@ npm warn Unknown env config "min-release-age". This will stop working in the nex
 > vitest run
 
 
-[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mC:/Users/slpir/IdeaProjects/udc-ab-run-a/app[39m
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mC:/workspace/ab-run-a/app[39m
 
  [32m✓[39m src/pricing.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 2[2mms[22m[39m
  [32m✓[39m src/discounts.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 3[2mms[22m[39m

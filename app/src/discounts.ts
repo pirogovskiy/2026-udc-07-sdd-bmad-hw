@@ -23,11 +23,15 @@ export interface PriceBreakdown {
 }
 
 /**
- * D-4: baseKopecks * percentValue / 100, rounded half up. percentValue may
- * carry up to 2 decimal places (e.g. 16.15). Done with BigInt so the
- * multiply-then-divide never drifts on a floating-point .5 boundary —
- * `(1000 * 16.15) / 100` alone can land a hair under 161.5 in IEEE754 and
- * round down to 161 instead of the mathematically correct 162.
+ * D-4: baseKopecks * percentValue / 100, rounded half up. Done with BigInt
+ * so the multiply-then-divide never drifts on a floating-point .5
+ * boundary — `(1000 * 16.15) / 100` alone can land a hair under 161.5 in
+ * IEEE754 and round down to 161 instead of the mathematically correct 162.
+ *
+ * D-14: percentValue carries at most 2 decimal places (hundredths of a
+ * percent, per the Coupon.value contract in types.ts); `Math.round(percentValue * 100)`
+ * is also where any extra decimals get rounded away (half up), so e.g.
+ * 16.151 is treated identically to 16.15.
  */
 function percentOfKopecks(baseKopecks: number, percentValue: number): number {
   const scaledPercent = BigInt(Math.round(percentValue * 100)); // hundredths of a percent, exact integer
