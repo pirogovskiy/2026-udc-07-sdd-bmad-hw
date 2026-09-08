@@ -1,0 +1,410 @@
+diff --git a/app/src/discounts.test.ts b/app/src/discounts.test.ts
+new file mode 100644
+index 0000000..e194ea7
+--- /dev/null
++++ b/app/src/discounts.test.ts
+@@ -0,0 +1,214 @@
++import { describe, it, expect } from "vitest";
++import { calculateOrderTotal } from "./discounts.js";
++import type { Coupon, LineItem, Order } from "./types.js";
++
++// Amounts are whole kopecks. 25_000 = 250 грн.
++const item = (over: Partial<LineItem> = {}): LineItem => ({
++  sku: "AA-1",
++  name: "Thing",
++  unitPriceKopecks: 25_000,
++  quantity: 1,
++  category: "standard",
++  ...over,
++});
++
++const order = (over: Partial<Order> = {}): Order => ({
++  id: "o1",
++  items: [item()],
++  country: "UA",
++  customerTier: "none",
++  coupons: [],
++  ...over,
++});
++
++const coupon = (over: Partial<Coupon> = {}): Coupon => ({
++  code: "CODE",
++  kind: "percent",
++  value: 10,
++  expiresAt: "2999-01-01T00:00:00Z",
++  ...over,
++});
++
++const NOW = new Date("2026-01-01T00:00:00Z");
++
++describe("calculateOrderTotal — loyalty tier only", () => {
++  it("applies no discount for tier none", () => {
++    const o = order({ items: [item({ unitPriceKopecks: 100_000 })], customerTier: "none" });
++    const r = calculateOrderTotal(o, [], NOW);
++    expect(r.discountKopecks).toBe(0);
++    expect(r.discountedSubtotalKopecks).toBe(100_000);
++  });
++
++  it("applies silver's 5% off the item subtotal", () => {
++    const o = order({ items: [item({ unitPriceKopecks: 100_000 })], customerTier: "silver" });
++    const r = calculateOrderTotal(o, [], NOW);
++    expect(r.discountKopecks).toBe(5_000);
++    expect(r.discountedSubtotalKopecks).toBe(95_000);
++  });
++
++  it("applies gold's 10% off the item subtotal, not off shipping", () => {
++    const o = order({ items: [item({ unitPriceKopecks: 100_000 })], customerTier: "gold", country: "PL" });
++    const r = calculateOrderTotal(o, [], NOW);
++    // shipping (199 грн, international) must stay undiscounted
++    expect(r.shippingKopecks).toBe(19_900);
++    expect(r.discountKopecks).toBe(10_000);
++    expect(r.totalKopecks).toBe(90_000 + 19_900);
++  });
++});
++
++describe("calculateOrderTotal — coupons", () => {
++  it("rejects an unknown code without throwing", () => {
++    const o = order({ coupons: ["GHOST"] });
++    const r = calculateOrderTotal(o, [], NOW);
++    expect(r.appliedCoupons).toEqual([]);
++    expect(r.rejectedCoupons).toEqual([{ code: "GHOST", reason: "not_found" }]);
++  });
++
++  it("rejects an expired coupon silently and reports why", () => {
++    const c = coupon({ code: "OLD10", expiresAt: "2020-01-01T00:00:00Z" });
++    const o = order({ items: [item({ unitPriceKopecks: 100_000 })], coupons: ["OLD10"] });
++    const r = calculateOrderTotal(o, [c], NOW);
++    expect(r.discountKopecks).toBe(0);
++    expect(r.rejectedCoupons).toEqual([{ code: "OLD10", reason: "expired" }]);
++  });
++
++  it("treats expiresAt as exclusive: not valid AT the expiry instant", () => {
++    const c = coupon({ code: "EDGE", expiresAt: NOW.toISOString() });
++    const o = order({ coupons: ["EDGE"] });
++    const r = calculateOrderTotal(o, [c], NOW);
++    expect(r.rejectedCoupons).toEqual([{ code: "EDGE", reason: "expired" }]);
++  });
++
++  it("applies a fixed-amount coupon, capped so it can't push the subtotal below zero", () => {
++    const c = coupon({ code: "FIXED", kind: "fixed", value: 999_000 });
++    const o = order({ items: [item({ unitPriceKopecks: 10_000 })], coupons: ["FIXED"] });
++    const r = calculateOrderTotal(o, [c], NOW);
++    expect(r.discountedSubtotalKopecks).toBe(0);
++    expect(r.discountKopecks).toBe(10_000);
++  });
++
++  it("rejects a coupon below its minimum subtotal", () => {
++    const c = coupon({ code: "BIG50", kind: "percent", value: 50, minSubtotalKopecks: 200_000 });
++    const o = order({ items: [item({ unitPriceKopecks: 100_000 })], coupons: ["BIG50"] });
++    const r = calculateOrderTotal(o, [c], NOW);
++    expect(r.rejectedCoupons).toEqual([{ code: "BIG50", reason: "min_subtotal_not_met" }]);
++    expect(r.discountKopecks).toBe(0);
++  });
++
++  it("checks minSubtotal against the ORIGINAL subtotal, not a post-discount one", () => {
++    // Order subtotal is 100 000; a prior discount would drop it under the
++    // 80 000 bar, but the coupon must still qualify because it's checked
++    // against the pre-discount amount.
++    const c = coupon({ code: "QUALIFIES", kind: "percent", value: 10, minSubtotalKopecks: 80_000 });
++    const o = order({
++      items: [item({ unitPriceKopecks: 100_000 })],
++      customerTier: "gold", // -10% first
++      coupons: ["QUALIFIES"],
++    });
++    const r = calculateOrderTotal(o, [c], NOW);
++    expect(r.appliedCoupons).toEqual(["QUALIFIES"]);
++    expect(r.rejectedCoupons).toEqual([]);
++  });
++
++  it("collapses a repeated code into a single application and reports the repeat", () => {
++    const c = coupon({ code: "ONCE", kind: "percent", value: 10 });
++    const o = order({ items: [item({ unitPriceKopecks: 100_000 })], coupons: ["ONCE", "ONCE"] });
++    const r = calculateOrderTotal(o, [c], NOW);
++    expect(r.appliedCoupons).toEqual(["ONCE"]);
++    expect(r.rejectedCoupons).toEqual([{ code: "ONCE", reason: "duplicate" }]);
++    expect(r.discountKopecks).toBe(10_000);
++  });
++
++  it("applies several distinct coupons in the order the customer typed them", () => {
++    const a = coupon({ code: "A", kind: "percent", value: 10 });
++    const b = coupon({ code: "B", kind: "percent", value: 20 });
++    const o = order({ items: [item({ unitPriceKopecks: 100_000 })], coupons: ["A", "B"] });
++    const r = calculateOrderTotal(o, [a, b], NOW);
++    // sequential/compounding, not additive: 100_000 -> -10% -> 90_000 -> -20% -> 72_000
++    expect(r.discountedSubtotalKopecks).toBe(72_000);
++    expect(r.appliedCoupons).toEqual(["A", "B"]);
++  });
++});
++
++describe("calculateOrderTotal — category-scoped coupons", () => {
++  it("computes a category coupon's percentage off that category's own subtotal", () => {
++    const c = coupon({ code: "FRESH20", kind: "percent", value: 20, category: "fresh" });
++    const o = order({
++      items: [
++        item({ sku: "F1", unitPriceKopecks: 40_000, category: "fresh" }),
++        item({ sku: "S1", unitPriceKopecks: 60_000, category: "standard" }),
++      ],
++      coupons: ["FRESH20"],
++    });
++    const r = calculateOrderTotal(o, [c], NOW);
++    // 20% of the 40_000 fresh line only, not of the 100_000 order subtotal
++    expect(r.discountKopecks).toBe(8_000);
++    expect(r.discountedSubtotalKopecks).toBe(92_000);
++  });
++
++  it("rejects a category coupon when the order has no items in that category", () => {
++    const c = coupon({ code: "DIGI10", kind: "percent", value: 10, category: "digital" });
++    const o = order({ items: [item({ category: "standard" })], coupons: ["DIGI10"] });
++    const r = calculateOrderTotal(o, [c], NOW);
++    expect(r.rejectedCoupons).toEqual([{ code: "DIGI10", reason: "empty_category" }]);
++    expect(r.discountKopecks).toBe(0);
++  });
++
++  it("combines a category coupon with the loyalty tier and a store-wide coupon", () => {
++    const catCoupon = coupon({ code: "FRESH10", kind: "percent", value: 10, category: "fresh" });
++    const wide = coupon({ code: "WIDE5", kind: "percent", value: 5 });
++    const o = order({
++      items: [
++        item({ sku: "F1", unitPriceKopecks: 50_000, category: "fresh" }),
++        item({ sku: "S1", unitPriceKopecks: 50_000, category: "standard" }),
++      ],
++      customerTier: "gold", // 10%
++      coupons: ["FRESH10", "WIDE5"],
++    });
++    const r = calculateOrderTotal(o, [catCoupon, wide], NOW);
++    // 1) FRESH10 on the fresh line: 50_000 -> -10% -> 45_000 (fresh line loses 5_000)
++    // remaining subtotal now 95_000
++    // 2) gold tier 10% off 95_000 -> 9_500 -> remaining 85_500
++    // 3) WIDE5 5% off 85_500 -> round(4_275) -> remaining 81_225
++    expect(r.discountedSubtotalKopecks).toBe(81_225);
++    expect(r.appliedCoupons).toEqual(["FRESH10", "WIDE5"]);
++  });
++});
++
++describe("calculateOrderTotal — rounding and money conservation", () => {
++  it("rounds each step to the nearest whole kopeck, half rounding up", () => {
++    // 33% of 1 kopeck's worth of odd subtotal to force a .5 boundary:
++    // 1 грн (100 kopecks) at 33% is 33 kopecks exactly; use 15% of 250 to get a half.
++    const c = coupon({ code: "HALF", kind: "percent", value: 15 });
++    const o = order({ items: [item({ unitPriceKopecks: 250 })], coupons: ["HALF"] });
++    const r = calculateOrderTotal(o, [c], NOW);
++    // 250 * 15 / 100 = 37.5 -> rounds up to 38
++    expect(r.discountKopecks).toBe(38);
++    expect(r.discountedSubtotalKopecks).toBe(212);
++  });
++
++  it("never produces a negative discounted subtotal, even with an oversized fixed coupon and a tier stacked on top", () => {
++    const c = coupon({ code: "HUGE", kind: "fixed", value: 1_000_000 });
++    const o = order({ items: [item({ unitPriceKopecks: 10_000 })], customerTier: "gold", coupons: ["HUGE"] });
++    const r = calculateOrderTotal(o, [c], NOW);
++    expect(r.discountedSubtotalKopecks).toBe(0);
++    expect(r.totalKopecks).toBeGreaterThanOrEqual(r.shippingKopecks);
++  });
++
++  it("keeps discount steps summing exactly to the total discount (no drift)", () => {
++    const a = coupon({ code: "A", kind: "percent", value: 13, category: "fresh" });
++    const b = coupon({ code: "B", kind: "percent", value: 7 });
++    const o = order({
++      items: [
++        item({ sku: "F1", unitPriceKopecks: 33_333, category: "fresh" }),
++        item({ sku: "S1", unitPriceKopecks: 66_667, category: "standard" }),
++      ],
++      customerTier: "silver",
++      coupons: ["A", "B"],
++    });
++    const r = calculateOrderTotal(o, [a, b], NOW);
++    const stepsSum = r.steps.reduce((sum, s) => sum + s.amountKopecks, 0);
++    expect(stepsSum).toBe(r.discountKopecks);
++    expect(r.discountedSubtotalKopecks + r.discountKopecks).toBe(r.subtotalKopecks);
++  });
++});
+diff --git a/app/src/discounts.ts b/app/src/discounts.ts
+new file mode 100644
+index 0000000..d55f38f
+--- /dev/null
++++ b/app/src/discounts.ts
+@@ -0,0 +1,184 @@
++// Discount engine: loyalty tiers + coupon codes.
++//
++// The feature request (materials/feature-request.md) is deliberately
++// ambiguous. Below are the decisions this implementation makes to turn it
++// into something testable. None of these is "the" right answer — they are
++// the ones this codebase commits to.
++//
++// 1. Discount BASE is the item subtotal only (subtotalKopecks). Shipping is
++//    added afterwards, undiscounted — discounts are about products, not
++//    delivery.
++//
++// 2. Stacking is SEQUENTIAL (compounding), not additive, and runs in this
++//    fixed order:
++//      a) category-scoped coupons, in the order the customer typed them —
++//         each computed off THAT CATEGORY's own remaining value;
++//      b) the loyalty-tier discount, off the order's remaining subtotal;
++//      c) non-category coupons, in the order the customer typed them, each
++//         off the order's remaining subtotal.
++//    Compounding (10% then 15% of what's left) rather than adding
++//    percentages (25% flat) is the choice made here: it can never push the
++//    combined rate over 100%, which an additive scheme can.
++//
++// 3. Multiple coupons: ALL valid coupons are applied (not "best only"), in
++//    entry order. A code repeated in `order.coupons` is applied once; the
++//    repeat is reported as rejected ("duplicate"). Unknown or expired codes
++//    are silently skipped rather than throwing — the ticket says expired
++//    codes "should not work", not "should error" — but every skip is
++//    reported in `rejectedCoupons` so a caller can still tell the customer
++//    why.
++//
++// 4. Rounding happens PER STEP, to the nearest kopeck, half rounds up. Each
++//    discount step produces a whole-kopeck amount before the next step reads
++//    the running total, so nothing fractional ever carries forward.
++//
++// 5. A category coupon's percentage is computed off that category's own
++//    subtotal, not the whole order's.
++//
++// 6. `minSubtotalKopecks` is checked once, against the order's ORIGINAL
++//    (pre-discount) item subtotal — an earlier discount can't retroactively
++//    disqualify a coupon that already cleared the bar.
++//
++// 7. The total can't go negative: every step's discount is capped to its own
++//    remaining base (a percentage of a non-negative base is non-negative and
++//    ≤ the base; a fixed amount is clamped with Math.min to the base), so
++//    the discounted subtotal can reach 0 but never cross below it.
++import type { Coupon, LineItem, Order } from "./types.js";
++import { lineTotalKopecks, shippingKopecks, subtotalKopecks, tierPercent } from "./pricing.js";
++
++export type CouponRejectionReason =
++  | "duplicate"
++  | "not_found"
++  | "expired"
++  | "min_subtotal_not_met"
++  | "empty_category";
++
++export interface RejectedCoupon {
++  code: string;
++  reason: CouponRejectionReason;
++}
++
++export interface DiscountStep {
++  source: "category_coupon" | "tier" | "coupon";
++  code?: string;
++  category?: LineItem["category"];
++  amountKopecks: number;
++}
++
++export interface DiscountBreakdown {
++  subtotalKopecks: number;
++  discountKopecks: number;
++  discountedSubtotalKopecks: number;
++  shippingKopecks: number;
++  totalKopecks: number;
++  steps: DiscountStep[];
++  appliedCoupons: string[];
++  rejectedCoupons: RejectedCoupon[];
++}
++
++function roundKopecks(amount: number): number {
++  return Math.round(amount);
++}
++
++function percentOf(baseKopecks: number, percent: number): number {
++  return roundKopecks((baseKopecks * percent) / 100);
++}
++
++function isExpired(coupon: Coupon, now: Date): boolean {
++  return now.getTime() >= new Date(coupon.expiresAt).getTime();
++}
++
++/** Splits the item subtotal by category, in whole kopecks. */
++function subtotalByCategory(order: Order): Map<LineItem["category"], number> {
++  const byCategory = new Map<LineItem["category"], number>();
++  for (const item of order.items) {
++    byCategory.set(item.category, (byCategory.get(item.category) ?? 0) + lineTotalKopecks(item));
++  }
++  return byCategory;
++}
++
++/** Resolves each entered code against the catalog, dropping duplicates, unknown, expired and disqualified ones. */
++function resolveCoupons(order: Order, catalog: Coupon[], subtotal: number, now: Date, rejected: RejectedCoupon[]): Coupon[] {
++  const seen = new Set<string>();
++  const valid: Coupon[] = [];
++
++  for (const code of order.coupons) {
++    if (seen.has(code)) {
++      rejected.push({ code, reason: "duplicate" });
++      continue;
++    }
++    seen.add(code);
++
++    const coupon = catalog.find((c) => c.code === code);
++    if (!coupon) {
++      rejected.push({ code, reason: "not_found" });
++      continue;
++    }
++    if (isExpired(coupon, now)) {
++      rejected.push({ code, reason: "expired" });
++      continue;
++    }
++    if (coupon.minSubtotalKopecks !== undefined && subtotal < coupon.minSubtotalKopecks) {
++      rejected.push({ code, reason: "min_subtotal_not_met" });
++      continue;
++    }
++    valid.push(coupon);
++  }
++
++  return valid;
++}
++
++export function calculateOrderTotal(order: Order, catalog: Coupon[], now: Date = new Date()): DiscountBreakdown {
++  const subtotal = subtotalKopecks(order);
++  const shipping = shippingKopecks(order);
++
++  const rejectedCoupons: RejectedCoupon[] = [];
++  const validCoupons = resolveCoupons(order, catalog, subtotal, now, rejectedCoupons);
++
++  const steps: DiscountStep[] = [];
++  const appliedCoupons: string[] = [];
++  const byCategory = subtotalByCategory(order);
++
++  for (const coupon of validCoupons) {
++    if (!coupon.category) continue;
++    if (!byCategory.has(coupon.category)) {
++      rejectedCoupons.push({ code: coupon.code, reason: "empty_category" });
++      continue;
++    }
++    const remaining = byCategory.get(coupon.category) ?? 0;
++    const amount = coupon.kind === "percent" ? percentOf(remaining, coupon.value) : Math.min(coupon.value, remaining);
++    byCategory.set(coupon.category, remaining - amount);
++    steps.push({ source: "category_coupon", code: coupon.code, category: coupon.category, amountKopecks: amount });
++    appliedCoupons.push(coupon.code);
++  }
++
++  let remainingSubtotal = 0;
++  for (const value of byCategory.values()) remainingSubtotal += value;
++
++  const tierPct = tierPercent(order);
++  if (tierPct > 0) {
++    const amount = percentOf(remainingSubtotal, tierPct);
++    remainingSubtotal -= amount;
++    steps.push({ source: "tier", amountKopecks: amount });
++  }
++
++  for (const coupon of validCoupons) {
++    if (coupon.category) continue;
++    const amount =
++      coupon.kind === "percent" ? percentOf(remainingSubtotal, coupon.value) : Math.min(coupon.value, remainingSubtotal);
++    remainingSubtotal -= amount;
++    steps.push({ source: "coupon", code: coupon.code, amountKopecks: amount });
++    appliedCoupons.push(coupon.code);
++  }
++
++  return {
++    subtotalKopecks: subtotal,
++    discountKopecks: subtotal - remainingSubtotal,
++    discountedSubtotalKopecks: remainingSubtotal,
++    shippingKopecks: shipping,
++    totalKopecks: remainingSubtotal + shipping,
++    steps,
++    appliedCoupons,
++    rejectedCoupons,
++  };
++}

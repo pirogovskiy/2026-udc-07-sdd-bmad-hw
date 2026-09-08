@@ -1,0 +1,313 @@
+diff --git a/app/src/discounts.test.ts b/app/src/discounts.test.ts
+new file mode 100644
+index 0000000..8e44558
+--- /dev/null
++++ b/app/src/discounts.test.ts
+@@ -0,0 +1,179 @@
++import { describe, it, expect } from "vitest";
++import { priceOrder } from "./discounts.js";
++import type { Coupon, LineItem, Order } from "./types.js";
++
++// Amounts are whole kopecks. 25_000 = 250 грн.
++const item = (over: Partial<LineItem> = {}): LineItem => ({
++  sku: "AA-1",
++  name: "Thing",
++  unitPriceKopecks: 25_000,
++  quantity: 1,
++  category: "standard",
++  ...over,
++});
++
++const order = (over: Partial<Order> = {}): Order => ({
++  id: "o1",
++  items: [item()],
++  country: "UA",
++  customerTier: "none",
++  coupons: [],
++  ...over,
++});
++
++const coupon = (over: Partial<Coupon> = {}): Coupon => ({
++  code: "CODE",
++  kind: "percent",
++  value: 10,
++  expiresAt: "2999-01-01T00:00:00.000Z",
++  ...over,
++});
++
++const PAST = "2000-01-01T00:00:00.000Z";
++
++describe("AC-1: tier discount alone", () => {
++  it("Gold order without coupons is discounted 10% on the goods total", () => {
++    const o = order({
++      customerTier: "gold",
++      items: [item({ unitPriceKopecks: 100_000 })],
++    });
++    const result = priceOrder(o, []);
++    expect(result.tierDiscountKopecks).toBe(10_000);
++    expect(result.goodsTotalKopecks).toBe(90_000);
++  });
++});
++
++describe("AC-2: tier discount then a percent coupon, sequentially", () => {
++  it("applies the coupon to the remainder left after the tier discount", () => {
++    const o = order({
++      customerTier: "silver",
++      items: [item({ unitPriceKopecks: 100_000 })],
++      coupons: ["SAVE15"],
++    });
++    const catalog = [coupon({ code: "SAVE15", kind: "percent", value: 15 })];
++    const result = priceOrder(o, catalog);
++    expect(result.tierDiscountKopecks).toBe(5_000);
++    expect(result.couponDiscountKopecks).toBe(14_250);
++    expect(result.appliedCoupons).toEqual(["SAVE15"]);
++    expect(result.goodsTotalKopecks).toBe(80_750);
++  });
++});
++
++describe("AC-3: only the best of two same-category coupons applies", () => {
++  it("keeps the 30% fresh coupon and drops the 20% fresh coupon", () => {
++    const o = order({
++      items: [item({ category: "fresh", unitPriceKopecks: 40_000 })],
++      coupons: ["FRESH20", "FRESH30"],
++    });
++    const catalog = [
++      coupon({ code: "FRESH20", kind: "percent", value: 20, category: "fresh" }),
++      coupon({ code: "FRESH30", kind: "percent", value: 30, category: "fresh" }),
++    ];
++    const result = priceOrder(o, catalog);
++    expect(result.appliedCoupons).toEqual(["FRESH30"]);
++    expect(result.couponDiscountKopecks).toBe(12_000);
++  });
++});
++
++describe("AC-4: an expired coupon is silently ignored", () => {
++  it("drops the expired coupon without throwing, keeping other discounts intact", () => {
++    const o = order({
++      customerTier: "gold",
++      items: [item({ unitPriceKopecks: 100_000 })],
++      coupons: ["OLD"],
++    });
++    const catalog = [coupon({ code: "OLD", kind: "percent", value: 50, expiresAt: PAST })];
++    const result = priceOrder(o, catalog);
++    expect(result.appliedCoupons).toEqual([]);
++    expect(result.couponDiscountKopecks).toBe(0);
++    expect(result.tierDiscountKopecks).toBe(10_000);
++  });
++});
++
++describe("AC-5: a fixed coupon larger than the goods total is cut, not negative", () => {
++  it("caps the discount at the remaining goods total and lets shipping stand alone", () => {
++    const o = order({
++      items: [item({ unitPriceKopecks: 10_000 })],
++      coupons: ["FLAT150"],
++    });
++    const catalog = [coupon({ code: "FLAT150", kind: "fixed", value: 15_000 })];
++    const result = priceOrder(o, catalog);
++    expect(result.couponDiscountKopecks).toBe(10_000);
++    expect(result.goodsTotalKopecks).toBe(0);
++    expect(result.totalKopecks).toBe(result.shippingKopecks);
++  });
++});
++
++describe("AC-6: minSubtotalKopecks is checked against the raw subtotal", () => {
++  it("still applies the coupon even though the tier discount would drop the remainder below the minimum", () => {
++    const o = order({
++      customerTier: "gold",
++      items: [item({ unitPriceKopecks: 100_000 })],
++      coupons: ["BIGORDER"],
++    });
++    const catalog = [
++      coupon({ code: "BIGORDER", kind: "percent", value: 10, minSubtotalKopecks: 95_000 }),
++    ];
++    const result = priceOrder(o, catalog);
++    expect(result.appliedCoupons).toEqual(["BIGORDER"]);
++  });
++});
++
++describe("AC-7: a category coupon discounts only that category's raw subtotal", () => {
++  it("computes 10% of the fresh items only, ignoring the standard items in the same order", () => {
++    const o = order({
++      items: [
++        item({ category: "fresh", unitPriceKopecks: 30_000 }),
++        item({ category: "standard", unitPriceKopecks: 70_000, sku: "BB-1" }),
++      ],
++      coupons: ["FRESH10"],
++    });
++    const catalog = [coupon({ code: "FRESH10", kind: "percent", value: 10, category: "fresh" })];
++    const result = priceOrder(o, catalog);
++    expect(result.couponDiscountKopecks).toBe(3_000);
++  });
++});
++
++describe("AC-8: a half-kopeck discount rounds up", () => {
++  it("rounds 7.5 kopecks up to 8", () => {
++    const o = order({ items: [item({ unitPriceKopecks: 15, quantity: 1 })], coupons: ["HALF"] });
++    const catalog = [coupon({ code: "HALF", kind: "percent", value: 50 })];
++    const result = priceOrder(o, catalog);
++    expect(result.couponDiscountKopecks).toBe(8);
++  });
++});
++
++describe("AC-9: an empty order is a valid, all-zero result", () => {
++  it("zeroes out every amount, including shipping, and drops coupons needing a minimum", () => {
++    const o = order({ items: [], coupons: ["BIGORDER"] });
++    const catalog = [coupon({ code: "BIGORDER", kind: "percent", value: 10, minSubtotalKopecks: 1 })];
++    const result = priceOrder(o, catalog);
++    expect(result.subtotalKopecks).toBe(0);
++    expect(result.tierDiscountKopecks).toBe(0);
++    expect(result.appliedCoupons).toEqual([]);
++    expect(result.shippingKopecks).toBe(0);
++    expect(result.totalKopecks).toBe(0);
++  });
++});
++
++describe("AC-10: a code missing from the catalog is silently ignored", () => {
++  it("drops the unknown code without throwing", () => {
++    const o = order({ coupons: ["GHOST"] });
++    const result = priceOrder(o, []);
++    expect(result.appliedCoupons).toEqual([]);
++    expect(result.couponDiscountKopecks).toBe(0);
++  });
++});
++
++describe("AC-11: the same coupon code typed twice applies only once", () => {
++  it("collapses duplicate codes before applying discounts", () => {
++    const o = order({
++      items: [item({ unitPriceKopecks: 100_000 })],
++      coupons: ["SAVE10", "SAVE10"],
++    });
++    const catalog = [coupon({ code: "SAVE10", kind: "percent", value: 10 })];
++    const result = priceOrder(o, catalog);
++    expect(result.appliedCoupons).toEqual(["SAVE10"]);
++    expect(result.couponDiscountKopecks).toBe(10_000);
++  });
++});
+diff --git a/app/src/discounts.ts b/app/src/discounts.ts
+new file mode 100644
+index 0000000..358923c
+--- /dev/null
++++ b/app/src/discounts.ts
+@@ -0,0 +1,112 @@
++// Discount engine — see docs/spec/pricing-discounts.md for the decisions
++// (D-1..D-13) and acceptance criteria (AC-1..AC-11) this file implements.
++// Plugs in alongside pricing.ts; does not change its signatures or behaviour.
++
++import type { Coupon, LineItem, Order } from "./types.js";
++import { lineTotalKopecks, subtotalKopecks, shippingKopecks, tierPercent } from "./pricing.js";
++
++export interface PriceBreakdown {
++  /** Сира сума товарів, до жодних знижок. */
++  subtotalKopecks: number;
++  /** Знижка за рівнем лояльності, у копійках (0, якщо тариф "none"). */
++  tierDiscountKopecks: number;
++  /** Сумарна знижка від усіх застосованих промокодів, у копійках. */
++  couponDiscountKopecks: number;
++  /** Коди промокодів, що фактично застосувались (після D-3/D-8/D-9/D-10), у порядку застосування. */
++  appliedCoupons: string[];
++  /** subtotalKopecks - tierDiscountKopecks - couponDiscountKopecks, не менше 0. */
++  goodsTotalKopecks: number;
++  /** Як і раніше, з pricing.ts — доставка знижок не отримує. */
++  shippingKopecks: number;
++  /** goodsTotalKopecks + shippingKopecks. */
++  totalKopecks: number;
++}
++
++/** D-4: half a kopeck (or above) rounds up. Inputs are always non-negative. */
++function roundKopecks(amountKopecks: number): number {
++  return Math.round(amountKopecks);
++}
++
++function categoryRawSubtotalKopecks(order: Order, category: LineItem["category"]): number {
++  return order.items
++    .filter((item) => item.category === category)
++    .reduce((sum, item) => sum + lineTotalKopecks(item), 0);
++}
++
++/** D-8/D-9: not-in-catalog and expired coupons are both a silent no-op. */
++function isUsable(coupon: Coupon, rawSubtotalKopecks: number): boolean {
++  const notExpired = Date.now() < new Date(coupon.expiresAt).getTime();
++  const meetsMinimum = coupon.minSubtotalKopecks === undefined || rawSubtotalKopecks >= coupon.minSubtotalKopecks;
++  return notExpired && meetsMinimum;
++}
++
++/** D-5/D-11: the base a coupon discounts from, and the raw discount cut to that base. */
++function couponDiscountAgainst(coupon: Coupon, baseKopecks: number): number {
++  const rawAmount =
++    coupon.kind === "percent" ? roundKopecks((baseKopecks * coupon.value) / 100) : coupon.value;
++  return Math.min(rawAmount, baseKopecks);
++}
++
++export function priceOrder(order: Order, catalog: Coupon[]): PriceBreakdown {
++  const rawSubtotal = subtotalKopecks(order);
++
++  const tierDiscountKopecks = Math.min(roundKopecks((rawSubtotal * tierPercent(order)) / 100), rawSubtotal);
++  let remaining = rawSubtotal - tierDiscountKopecks;
++
++  // D-10: same code typed twice counts once. D-9: unknown codes vanish.
++  const seenCodes = new Set<string>();
++  const candidates: Array<{ code: string; coupon: Coupon }> = [];
++  for (const code of order.coupons) {
++    if (seenCodes.has(code)) continue;
++    seenCodes.add(code);
++    const coupon = catalog.find((c) => c.code === code);
++    if (coupon && isUsable(coupon, rawSubtotal)) {
++      candidates.push({ code, coupon });
++    }
++  }
++
++  // D-3/D-13: among coupons targeting the same category, only the one with
++  // the largest discount (computed from the raw category base) survives.
++  const candidateAmounts = candidates.map(({ coupon }) =>
++    coupon.category ? couponDiscountAgainst(coupon, categoryRawSubtotalKopecks(order, coupon.category)) : 0,
++  );
++  const bestPerCategory = new Map<LineItem["category"], number>();
++  candidates.forEach(({ coupon }, i) => {
++    if (!coupon.category) return;
++    const amount = candidateAmounts[i]!;
++    const current = bestPerCategory.get(coupon.category);
++    if (current === undefined || amount > current) bestPerCategory.set(coupon.category, amount);
++  });
++  const categoryClaimed = new Set<LineItem["category"]>();
++  const applied = candidates.filter(({ coupon }, i) => {
++    if (!coupon.category) return true;
++    if (categoryClaimed.has(coupon.category)) return false; // already claimed by an earlier, equally-best coupon
++    const isBest = candidateAmounts[i] === bestPerCategory.get(coupon.category);
++    if (isBest) categoryClaimed.add(coupon.category);
++    return isBest;
++  });
++
++  // D-1: apply the survivors sequentially, each from the remainder left by the previous step.
++  let couponDiscountKopecks = 0;
++  const appliedCoupons: string[] = [];
++  for (const { code, coupon } of applied) {
++    const base = coupon.category ? categoryRawSubtotalKopecks(order, coupon.category) : remaining;
++    const discount = Math.min(couponDiscountAgainst(coupon, base), remaining);
++    remaining -= discount;
++    couponDiscountKopecks += discount;
++    appliedCoupons.push(code);
++  }
++
++  const goodsTotalKopecks = remaining;
++  const shipping = shippingKopecks(order);
++
++  return {
++    subtotalKopecks: rawSubtotal,
++    tierDiscountKopecks,
++    couponDiscountKopecks,
++    appliedCoupons,
++    goodsTotalKopecks,
++    shippingKopecks: shipping,
++    totalKopecks: goodsTotalKopecks + shipping,
++  };
++}
+diff --git a/app/src/index.ts b/app/src/index.ts
+index b496353..74938e4 100644
+--- a/app/src/index.ts
++++ b/app/src/index.ts
+@@ -5,3 +5,5 @@ export {
+   shippingKopecks,
+   tierPercent,
+ } from "./pricing.js";
++export type { PriceBreakdown } from "./discounts.js";
++export { priceOrder } from "./discounts.js";
