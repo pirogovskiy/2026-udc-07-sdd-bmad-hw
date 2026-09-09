@@ -212,10 +212,22 @@ describe("priceOrder", () => {
     expect(result.couponDiscountKopecks).toBe(51); // 1.015% rounds to 1.02%, 1.02% of 5000 = 51
   });
 
-  it("boundary: 16.1549% rounds to 16.15% giving 1615 kopecks (162 when base 1000)", () => {
+  it("AC-12 (boundary): 16.1549% rounds to 16.15%, giving 162 kopecks on 1000-kopeck base", () => {
     const precise = coupon({ code: "PRECISE1549", value: 16.1549 });
     const o = order({ items: [item({ unitPriceKopecks: 1_000 })], coupons: ["PRECISE1549"] });
     const result = priceOrder(o, [precise]);
     expect(result.couponDiscountKopecks).toBe(162); // 16.1549% rounds to 16.15%, 16.15% of 1000 = 161.5 → 162
+  });
+
+  it("boundary (exponential): 0.0000001% (1e-7) rounds to 0.00%, coupon skipped, appliedCoupons empty", () => {
+    const tiny = coupon({ code: "TINY", value: 0.0000001 });
+    const o = order({
+      items: [item({ unitPriceKopecks: 1_000_000 })],
+      coupons: ["TINY"],
+    });
+    const result = priceOrder(o, [tiny]);
+    expect(result.couponDiscountKopecks).toBe(0); // 0.0000001% rounds to 0.00%, giving 0 kopecks
+    expect(result.appliedCoupons).toEqual([]); // coupon with zero discount is skipped
+    expect(result.goodsTotalKopecks).toBe(1_000_000);
   });
 });

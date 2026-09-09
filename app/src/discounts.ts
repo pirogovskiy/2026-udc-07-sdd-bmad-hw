@@ -37,7 +37,14 @@ export interface PriceBreakdown {
  */
 function percentOfKopecks(baseKopecks: number, percentValue: number): number {
   // Parse string to avoid float scaling bugs on boundaries like 1.005 → 100.49999
-  const str = String(percentValue); // "16.1549" → "16.1549", avoids IEEE754 rounding
+  let str = String(percentValue); // "16.1549" → "16.1549", avoids IEEE754 rounding
+  // Convert exponential notation (e.g., "1e-7") to decimal before parsing
+  if (str.toLowerCase().includes("e")) {
+    str = percentValue.toLocaleString("en-US", {
+      useGrouping: false,
+      maximumFractionDigits: 20,
+    });
+  }
   const parts = str.split(".");
   let hundredthsOfPercent: bigint;
   const integerPart = parts[0] ?? "0";
